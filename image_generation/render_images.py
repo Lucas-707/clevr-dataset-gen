@@ -9,6 +9,7 @@ from __future__ import print_function
 import math, sys, random, argparse, json, os, tempfile
 from datetime import datetime as dt
 from collections import Counter
+from contextlib import redirect_stdout
 
 """
 Renders random scenes using Blender, each with with a random number of objects;
@@ -64,9 +65,9 @@ parser.add_argument('--shape_color_combos_json', default=None,
          "for CLEVR-CoGenT.")
 
 # Settings for objects
-parser.add_argument('--min_objects', default=3, type=int,
+parser.add_argument('--min_objects', default=1, type=int,
     help="The minimum number of objects to place in each scene")
-parser.add_argument('--max_objects', default=10, type=int,
+parser.add_argument('--max_objects', default=1, type=int,
     help="The maximum number of objects to place in each scene")
 parser.add_argument('--min_dist', default=0.25, type=float,
     help="The minimum allowed distance between object centers")
@@ -74,7 +75,7 @@ parser.add_argument('--margin', default=0.4, type=float,
     help="Along all cardinal directions (left, right, front, back), all " +
          "objects will be at least this distance apart. This makes resolving " +
          "spatial relationships slightly less ambiguous.")
-parser.add_argument('--min_pixels_per_object', default=200, type=int,
+parser.add_argument('--min_pixels_per_object', default=0, type=int,
     help="All objects will have at least this many visible pixels in the " +
          "final rendered images; this ensures that no objects are fully " +
          "occluded by other objects.")
@@ -87,7 +88,7 @@ parser.add_argument('--start_idx', default=0, type=int,
     help="The index at which to start for numbering rendered images. Setting " +
          "this to non-zero values allows you to distribute rendering across " +
          "multiple machines and recombine the results later.")
-parser.add_argument('--num_images', default=5, type=int,
+parser.add_argument('--num_images', default=1, type=int,
     help="The number of images to render")
 parser.add_argument('--filename_prefix', default='CLEVR',
     help="This prefix will be prepended to the rendered images and JSON scenes")
@@ -127,9 +128,9 @@ parser.add_argument('--use_gpu', default=0, type=int,
     help="Setting --use_gpu 1 enables GPU-accelerated rendering using CUDA. " +
          "You must have an NVIDIA GPU with the CUDA toolkit installed for " +
          "to work.")
-parser.add_argument('--width', default=320, type=int,
+parser.add_argument('--width', default=64, type=int,
     help="The width (in pixels) for the rendered images")
-parser.add_argument('--height', default=240, type=int,
+parser.add_argument('--height', default=64, type=int,
     help="The height (in pixels) for the rendered images")
 parser.add_argument('--key_light_jitter', default=1.0, type=float,
     help="The magnitude of random jitter to add to the key light position.")
@@ -137,14 +138,14 @@ parser.add_argument('--fill_light_jitter', default=1.0, type=float,
     help="The magnitude of random jitter to add to the fill light position.")
 parser.add_argument('--back_light_jitter', default=1.0, type=float,
     help="The magnitude of random jitter to add to the back light position.")
-parser.add_argument('--camera_jitter', default=0.5, type=float,
+parser.add_argument('--camera_jitter', default=0.0, type=float,
     help="The magnitude of random jitter to add to the camera position")
 parser.add_argument('--render_num_samples', default=512, type=int,
     help="The number of samples to use when rendering. Larger values will " +
          "result in nicer images but will cause rendering to take longer.")
-parser.add_argument('--render_min_bounces', default=8, type=int,
+parser.add_argument('--render_min_bounces', default=4, type=int,
     help="The minimum number of bounces to use for rendering.")
-parser.add_argument('--render_max_bounces', default=8, type=int,
+parser.add_argument('--render_max_bounces', default=4, type=int,
     help="The maximum number of bounces to use for rendering.")
 parser.add_argument('--render_tile_size', default=256, type=int,
     help="The tile size to use for rendering. This should not affect the " +
@@ -178,6 +179,7 @@ def main(args):
     if args.save_blendfiles == 1:
       blend_path = blend_template % (i + args.start_idx)
     num_objects = random.randint(args.min_objects, args.max_objects)
+    
     render_scene(args,
       num_objects=num_objects,
       output_index=(i + args.start_idx),
@@ -186,6 +188,9 @@ def main(args):
       output_scene=scene_path,
       output_blendfile=blend_path,
     )
+    with open('render_log.txt', 'w') as f:
+      with redirect_stdout(f):
+        print("finished render image ", i)
 
   # After rendering all images, combine the JSON files for each scene into a
   # single JSON file.
@@ -275,6 +280,13 @@ def render_scene(args,
   # Figure out the left, up, and behind directions along the plane and record
   # them in the scene structure
   camera = bpy.data.objects['Camera']
+  # print("camera object .data: ", camera.data)
+  camera.data.lens = 225
+  # print("camera lens length: ", camera.data.lens)
+  # print("camera location: ", camera.location)
+  camera.location[0] = 0
+  camera.location[1] = -9.9154
+  camera.location[2] = 5.3437
   plane_normal = plane.data.vertices[0].normal
   cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
   cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
@@ -308,6 +320,14 @@ def render_scene(args,
 
   # Now make some random objects
   objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera)
+
+  obj = blender_objects[0]
+  # print("obj data: ", obj.data)
+  mesh = obj.data
+  mesh_save_path = output_scene[:-4] + "ply"
+  # print("mesh_save_path: ", mesh_save_path)
+  bpy.ops.export_mesh.ply(filepath=mesh_save_path, axis_forward='Z', axis_up='Y',)
+
 
   # Render the scene and dump the scene data structure
   scene_struct['objects'] = objects
@@ -366,8 +386,9 @@ def add_random_objects(scene_struct, num_objects, args, camera):
         for obj in blender_objects:
           utils.delete_object(obj)
         return add_random_objects(scene_struct, num_objects, args, camera)
-      x = random.uniform(-3, 3)
-      y = random.uniform(-3, 3)
+      # x = random.uniform(-3, 3)
+      # y = random.uniform(-3, 3)
+      x, y = 0, -0.75
       # Check to make sure the new object is further than min_dist from all
       # other objects, and further than margin along the four cardinal directions
       dists_good = True
